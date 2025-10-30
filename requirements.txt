@@ -1,0 +1,9 @@
+transformers>=4.45.0
+torch>=2.0.0
+torchvision>=0.15.0
+pillow>=10.0.0
+accelerate>=0.20.0
+bitsandbytes>=0.41.0
+qwen-vl-utils>=0.0.8
+sentencepiece>=0.1.99
+
