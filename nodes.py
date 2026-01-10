@@ -74,7 +74,7 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
     Load Qwen VL model with specified quantization
     Returns (model, processor)
     """
-    from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+    from transformers import AutoProcessor, AutoModelForVision2Seq
     
     cache_key = f"{model_name}_{quantization}_{device}"
     
@@ -124,9 +124,9 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
         load_kwargs["torch_dtype"] = torch.float16
         load_kwargs["device_map"] = "auto"
     
-    # Load model
+    # Load model using AutoModelForVision2Seq to support both Qwen2-VL and Qwen3-VL
     try:
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model = AutoModelForVision2Seq.from_pretrained(
             model_name,
             **load_kwargs
         )
