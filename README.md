@@ -1,3 +1,11 @@
+# Prologue, AI warning!
+
+This is a fork of https://github.com/hardik-uppal/ComfyUI-QwenVL-MultiImage.
+It appears to be heavily auto-generated with AI, and did not work with Qwen3 out of the box.
+
+I forked it, made some small adjustments to get it running on my system. Can't say I know the code well or I'm behind it, you've been warned.
+
+
 # ComfyUI-QwenVL-MultiImage 🧪
 
 A powerful ComfyUI custom node that integrates Qwen2.5-VL and Qwen3-VL vision-language models with **multi-image support**. Process multiple images simultaneously with advanced AI capabilities for image understanding, comparison, and analysis.
