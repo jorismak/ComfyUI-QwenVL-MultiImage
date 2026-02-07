@@ -123,15 +123,22 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
     else:  # None (FP16)
         load_kwargs["torch_dtype"] = torch.float16
         load_kwargs["device_map"] = "auto"
-
-    # Load model using AutoModelForImageTextToText to support both Qwen2-VL and Qwen3-VL
+    
+    # Enable Flash Attention 2 if available (must be set before loading)
     try:
-        model = AutoModelForImageTextToText.from_pretrained(model_name, **load_kwargs)
-
-        # Enable flash attention if available
-        if hasattr(model.config, "use_flash_attention_2"):
-            model.config.use_flash_attention_2 = True
-
+        import flash_attn
+        load_kwargs["attn_implementation"] = "flash_attention_2"
+        print("Flash Attention 2 enabled")
+    except ImportError:
+        print("Flash Attention 2 not available, using default attention")
+    
+    # Load model using AutoModelForVision2Seq to support both Qwen2-VL and Qwen3-VL
+    try:
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_name,
+            **load_kwargs
+        )
+        
     except Exception as e:
         print(f"Error loading model: {e}")
         raise
@@ -291,7 +298,7 @@ class QwenVL_MultiImage:
         inputs = inputs.to(model.device)
 
         # Generate
-        with torch.no_grad():
+        with torch.inference_mode():
             generated_ids = model.generate(
                 **inputs,
                 max_new_tokens=max_tokens,
@@ -501,9 +508,12 @@ class QwenVL_MultiImage_Advanced:
             gen_kwargs["top_k"] = top_k
 
         # Generate
-        with torch.no_grad():
-            generated_ids = model.generate(**inputs, **gen_kwargs)
-
+        with torch.inference_mode():
+            generated_ids = model.generate(
+                **inputs,
+                **gen_kwargs
+            )
+        
         # Trim the input tokens from generated output
         generated_ids_trimmed = [
             out_ids[len(in_ids) :]
