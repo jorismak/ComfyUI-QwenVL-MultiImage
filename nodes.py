@@ -29,7 +29,12 @@ QWEN_MODELS = [
     "Qwen/Qwen2.5-VL-72B-Instruct",
 ]
 
-QUANTIZATION_OPTIONS = ["None (FP16)", "8-bit (Balanced)", "4-bit (VRAM-friendly)"]
+QUANTIZATION_OPTIONS = [
+    "None (FP16)",
+    "None (BF16)",
+    "8-bit (Balanced)",
+    "4-bit (VRAM-friendly)",
+]
 
 # Global model cache
 _MODEL_CACHE = {}
@@ -44,6 +49,8 @@ def clear_model_cache():
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        torch.xpu.empty_cache()
 
 
 def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
@@ -83,7 +90,24 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
 
     # Determine device
     if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            device = "xpu"
+        else:
+            device = "cpu"
+
+    print(f"Using device: {device}")
+
+    if device != "cuda" and quantization in {
+        "4-bit (VRAM-friendly)",
+        "8-bit (Balanced)",
+    }:
+        print(
+            "8-bit/4-bit quantization requires CUDA (bitsandbytes). "
+            "Falling back to FP16."
+        )
+        quantization = "None (FP16)"
 
     # Check if model is pre-quantized (FP8)
     is_fp8_model = "FP8" in model_name
@@ -100,7 +124,8 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
         load_kwargs["torch_dtype"] = (
             torch.float8_e4m3fn if hasattr(torch, "float8_e4m3fn") else torch.float16
         )
-        load_kwargs["device_map"] = "auto"
+        if device == "cuda":
+            load_kwargs["device_map"] = "auto"
     elif quantization == "4-bit (VRAM-friendly)":
         from transformers import BitsAndBytesConfig
 
@@ -120,28 +145,34 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
         )
         load_kwargs["quantization_config"] = quantization_config
         load_kwargs["device_map"] = "auto"
+    elif quantization == "None (BF16)":
+        load_kwargs["torch_dtype"] = torch.bfloat16
+        if device == "cuda":
+            load_kwargs["device_map"] = "auto"
     else:  # None (FP16)
         load_kwargs["torch_dtype"] = torch.float16
-        load_kwargs["device_map"] = "auto"
-    
+        if device == "cuda":
+            load_kwargs["device_map"] = "auto"
+
     # Enable Flash Attention 2 if available (must be set before loading)
     try:
         import flash_attn
+
         load_kwargs["attn_implementation"] = "flash_attention_2"
         print("Flash Attention 2 enabled")
     except ImportError:
         print("Flash Attention 2 not available, using default attention")
-    
+
     # Load model using AutoModelForVision2Seq to support both Qwen2-VL and Qwen3-VL
     try:
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_name,
-            **load_kwargs
-        )
-        
+        model = AutoModelForImageTextToText.from_pretrained(model_name, **load_kwargs)
+
     except Exception as e:
         print(f"Error loading model: {e}")
         raise
+
+    if device != "cuda":
+        model = model.to(device)
 
     # Cache the model
     _MODEL_CACHE[cache_key] = (model, processor)
@@ -364,7 +395,7 @@ class QwenVL_MultiImage_Advanced:
                 "num_beams": ("INT", {"default": 1, "min": 1, "max": 10, "step": 1}),
                 "keep_model_loaded": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 1, "min": 1, "max": 2**32 - 1}),
-                "device": (["auto", "cuda", "cpu"], {"default": "auto"}),
+                "device": (["auto", "cuda", "xpu", "cpu"], {"default": "auto"}),
             },
             "optional": {
                 "images_batch_2": ("IMAGE",),
@@ -509,11 +540,8 @@ class QwenVL_MultiImage_Advanced:
 
         # Generate
         with torch.inference_mode():
-            generated_ids = model.generate(
-                **inputs,
-                **gen_kwargs
-            )
-        
+            generated_ids = model.generate(**inputs, **gen_kwargs)
+
         # Trim the input tokens from generated output
         generated_ids_trimmed = [
             out_ids[len(in_ids) :]
