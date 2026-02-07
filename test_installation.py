@@ -88,14 +88,14 @@ def test_transformers_version():
         version = transformers.__version__
         print(f"Transformers version: {version}")
         
-        # Parse version
-        major, minor = map(int, version.split('.')[:2])
-        if major >= 4 and minor >= 45:
-            print("✓ Transformers version is sufficient")
-            return True
-        else:
-            print(f"⚠ Transformers version {version} may be too old (need >=4.45.0)")
-            return False
+    # Parse version
+    major, minor = map(int, version.split('.')[:2])
+    if major >= 5:
+        print("✓ Transformers version is sufficient")
+        return True
+    else:
+        print(f"⚠ Transformers version {version} may be too old (need >=5.0.0)")
+        return False
     except Exception as e:
         print(f"✗ Error checking transformers: {e}")
         return False
@@ -151,4 +151,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
