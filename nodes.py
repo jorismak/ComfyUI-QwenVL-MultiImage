@@ -37,6 +37,11 @@ QUANTIZATION_OPTIONS = [
     "4-bit (VRAM-friendly)",
 ]
 
+OFFLOAD_OPTIONS = [
+    "Disabled",
+    "CPU Offload (GPU-first)",
+]
+
 # Global model cache
 _MODEL_CACHE = {}
 
@@ -73,14 +78,22 @@ def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
     return Image.fromarray(numpy_image)
 
 
-def load_model(model_name: str, quantization: str, device: str = "auto"):
+def load_model(
+    model_name: str,
+    quantization: str,
+    device: str = "auto",
+    offload_mode: str = "Disabled",
+    gpu_memory_limit_gb: int = 0,
+):
     """
     Load Qwen VL model with specified quantization
     Returns (model, processor)
     """
     from transformers import AutoProcessor, AutoModelForImageTextToText
 
-    cache_key = f"{model_name}_{quantization}_{device}"
+    cache_key = (
+        f"{model_name}_{quantization}_{device}_{offload_mode}_{gpu_memory_limit_gb}"
+    )
 
     # Return cached model if available
     if cache_key in _MODEL_CACHE:
@@ -109,6 +122,10 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
             "Falling back to FP16."
         )
         quantization = "None (FP16)"
+
+    cpu_offload_enabled = offload_mode == "CPU Offload (GPU-first)" and device == "cuda"
+    if offload_mode != "Disabled" and device != "cuda":
+        print("CPU offload mode requires CUDA. Disabling offload mode.")
 
     # Check if model is pre-quantized (FP8)
     is_fp8_model = "FP8" in model_name
@@ -144,6 +161,7 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
 
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=True,
+            llm_int8_enable_fp32_cpu_offload=cpu_offload_enabled,
         )
         load_kwargs["quantization_config"] = quantization_config
         load_kwargs["device_map"] = "auto"
@@ -155,6 +173,18 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
         load_kwargs["torch_dtype"] = torch.float16
         if device == "cuda":
             load_kwargs["device_map"] = "auto"
+
+    if cpu_offload_enabled:
+        if gpu_memory_limit_gb > 0:
+            gpu_cap_gb = gpu_memory_limit_gb
+        else:
+            total_gpu_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            gpu_cap_gb = max(int(total_gpu_gb) - 2, 1)
+        load_kwargs["max_memory"] = {
+            0: f"{gpu_cap_gb}GiB",
+            "cpu": "64GiB",
+        }
+        print(f"CPU offload enabled with GPU memory cap: {gpu_cap_gb} GiB")
 
     # Enable Flash Attention 2 if available (must be set before loading)
     try:
@@ -182,6 +212,23 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
     return model, processor
 
 
+def get_input_device(model) -> torch.device:
+    """Get a safe input device for potentially offloaded/sharded models."""
+    device_map = getattr(model, "hf_device_map", None)
+    if isinstance(device_map, dict):
+        for mapped_device in device_map.values():
+            if isinstance(mapped_device, torch.device):
+                if mapped_device.type not in {"cpu", "disk"}:
+                    return mapped_device
+            elif isinstance(mapped_device, int):
+                return torch.device(f"cuda:{mapped_device}")
+            elif isinstance(mapped_device, str):
+                if mapped_device.startswith(("cuda", "xpu", "mps")):
+                    return torch.device(mapped_device)
+        return torch.device("cpu")
+    return getattr(model, "device", torch.device("cpu"))
+
+
 class QwenVL_MultiImage:
     """
     Standard QwenVL node with multi-image support
@@ -202,6 +249,11 @@ class QwenVL_MultiImage:
                     {"multiline": True, "default": "Describe these images in detail."},
                 ),
                 "quantization": (QUANTIZATION_OPTIONS, {"default": "8-bit (Balanced)"}),
+                "offload_mode": (OFFLOAD_OPTIONS, {"default": "Disabled"}),
+                "gpu_memory_limit_gb": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 128, "step": 1},
+                ),
                 "max_tokens": (
                     "INT",
                     {"default": 1024, "min": 64, "max": 4096, "step": 64},
@@ -227,6 +279,8 @@ class QwenVL_MultiImage:
         system_prompt,
         user_prompt,
         quantization,
+        offload_mode,
+        gpu_memory_limit_gb,
         max_tokens,
         keep_model_loaded,
         seed,
@@ -244,7 +298,9 @@ class QwenVL_MultiImage:
             torch.cuda.manual_seed(seed)
 
         # Load model
-        model, processor = load_model(model_name, quantization)
+        model, processor = load_model(
+            model_name, quantization, "auto", offload_mode, gpu_memory_limit_gb
+        )
 
         # Collect all images
         all_images = []
@@ -328,7 +384,7 @@ class QwenVL_MultiImage:
                 return_tensors="pt",
                 **video_kwargs,
             )
-        inputs = inputs.to(model.device)
+        inputs = inputs.to(get_input_device(model))
 
         # Generate
         with torch.inference_mode():
@@ -356,7 +412,6 @@ class QwenVL_MultiImage:
 
         return (output_text,)
 
-
 class QwenVL_MultiImage_Advanced:
     """
     Advanced QwenVL node with full parameter control and multi-image support
@@ -377,6 +432,11 @@ class QwenVL_MultiImage_Advanced:
                     {"multiline": True, "default": "Describe these images in detail."},
                 ),
                 "quantization": (QUANTIZATION_OPTIONS, {"default": "8-bit (Balanced)"}),
+                "offload_mode": (OFFLOAD_OPTIONS, {"default": "Disabled"}),
+                "gpu_memory_limit_gb": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 128, "step": 1},
+                ),
                 "max_tokens": (
                     "INT",
                     {"default": 1024, "min": 64, "max": 4096, "step": 64},
@@ -417,6 +477,8 @@ class QwenVL_MultiImage_Advanced:
         system_prompt,
         user_prompt,
         quantization,
+        offload_mode,
+        gpu_memory_limit_gb,
         max_tokens,
         temperature,
         top_p,
@@ -440,7 +502,9 @@ class QwenVL_MultiImage_Advanced:
             torch.cuda.manual_seed(seed)
 
         # Load model
-        model, processor = load_model(model_name, quantization, device)
+        model, processor = load_model(
+            model_name, quantization, device, offload_mode, gpu_memory_limit_gb
+        )
 
         # Collect all images
         all_images = []
@@ -524,7 +588,7 @@ class QwenVL_MultiImage_Advanced:
                 return_tensors="pt",
                 **video_kwargs,
             )
-        inputs = inputs.to(model.device)
+        inputs = inputs.to(get_input_device(model))
 
         # Prepare generation kwargs
         gen_kwargs = {

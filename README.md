@@ -15,6 +15,7 @@ A powerful ComfyUI custom node that integrates Qwen2.5-VL and Qwen3-VL vision-la
 - 🖼️ **Multi-Image Support**: Process multiple images in a single inference
 - 🤖 **Latest Models**: Support for Qwen2.5-VL and Qwen3-VL series
 - 💾 **Flexible Quantization**: 4-bit, 8-bit, and FP16 options for different VRAM requirements
+- 🧠 **CPU Offloading**: Keep GPU as primary device while offloading layers to CPU when needed
 - ⚡ **Model Caching**: Keep models loaded in VRAM for faster subsequent runs
 - 🎛️ **Two Node Variants**: Standard and Advanced nodes for different use cases
 - 🔧 **Full Parameter Control**: Temperature, top_p, top_k, beam search, and more (Advanced node)
@@ -111,9 +112,16 @@ Use the **"🧪 QwenVL Multi-Image (Advanced)"** node for fine-grained control:
 | **system_prompt** | System instructions | "You are a helpful assistant." | Any text |
 | **user_prompt** | Your question/task | "Describe these images..." | Any text |
 | **quantization** | Memory optimization mode | 8-bit (Balanced) | As-is/FP16/8-bit/4-bit |
+| **offload_mode** | GPU-first offloading strategy | Disabled | Disabled/CPU Offload (GPU-first) |
+| **gpu_memory_limit_gb** | Target GPU VRAM budget for model placement with CPU offload (0 = auto) | 0 | 0-128 |
 | **max_tokens** | Maximum output length | 1024 | 64-4096 |
 | **keep_model_loaded** | Cache model in VRAM | True | True/False |
 | **seed** | Random seed | 1 | 1 - 2^32-1 |
+
+**How `gpu_memory_limit_gb` works**:
+- Used only when `offload_mode = CPU Offload (GPU-first)`.
+- It is passed to Transformers `max_memory` as the GPU memory budget during model placement/sharding.
+- Default `0` means auto: this node uses approximately **(total GPU VRAM - 2 GiB)**, with a minimum of **1 GiB**.
 
 ### Advanced Parameters (Advanced Node Only)
 
@@ -165,9 +173,11 @@ Generate captions or descriptions for multiple images simultaneously.
 
 1. Switch to a smaller model (e.g., 2B or 3B)
 2. Enable more aggressive quantization (4-bit)
-3. Reduce `max_tokens`
-4. Process fewer images at once
-5. Set `keep_model_loaded` to False
+3. Enable `offload_mode = CPU Offload (GPU-first)`
+4. Set `gpu_memory_limit_gb` to reserve VRAM headroom (try `6` on 8GB cards)
+5. Reduce `max_tokens`
+6. Process fewer images at once
+7. Set `keep_model_loaded` to False
 
 ### Slow Performance
 
@@ -206,6 +216,7 @@ pip install -r requirements.txt --upgrade
 - Enable `keep_model_loaded` if running multiple inferences
 - Disable it if you need to switch between different models
 - Use 8-bit quantization as a good balance between quality and VRAM
+- Enable CPU offload for larger FP8 models on 8GB GPUs
 
 ### Prompt Engineering
 - Be specific about what you want from multiple images
@@ -270,4 +281,3 @@ If you find this project useful, please consider giving it a star!
 ---
 
 **Note**: Replace `YOUR_USERNAME` with your actual GitHub username before publishing.
-
