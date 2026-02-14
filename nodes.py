@@ -78,6 +78,54 @@ def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
     return Image.fromarray(numpy_image)
 
 
+def supports_bf16(device: str) -> bool:
+    """Return whether BF16 is supported on the selected device."""
+    if device == "cuda":
+        return torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+
+    if device == "xpu":
+        if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            return False
+        is_bf16_supported = getattr(torch.xpu, "is_bf16_supported", None)
+        return bool(callable(is_bf16_supported) and is_bf16_supported())
+
+    if device == "cpu":
+        cpu_backend = getattr(torch.backends, "cpu", None)
+        has_bf16 = getattr(cpu_backend, "has_bf16", False)
+        return bool(has_bf16)
+
+    return False
+
+
+def get_total_device_memory_gb(device: str) -> float:
+    """Get total memory for accelerator device 0 in GiB."""
+    if device == "cuda":
+        if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
+            raise RuntimeError("CUDA selected but no CUDA devices are available.")
+        if hasattr(torch.cuda, "mem_get_info"):
+            _, total_memory = torch.cuda.mem_get_info(0)
+        else:
+            total_memory = torch.cuda.get_device_properties(0).total_memory
+        return total_memory / 1024**3
+
+    if device == "xpu":
+        if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            raise RuntimeError("XPU selected but XPU runtime is not available.")
+        if torch.xpu.device_count() < 1:
+            raise RuntimeError("XPU selected but no XPU devices are available.")
+        if hasattr(torch.xpu, "mem_get_info"):
+            _, total_memory = torch.xpu.mem_get_info(0)
+        elif hasattr(torch.xpu, "get_device_properties"):
+            total_memory = torch.xpu.get_device_properties(0).total_memory
+        else:
+            raise RuntimeError(
+                "Cannot determine XPU memory. Update PyTorch/XPU runtime."
+            )
+        return total_memory / 1024**3
+
+    raise RuntimeError(f"Device '{device}' does not provide accelerator memory info.")
+
+
 def load_model(
     model_name: str,
     quantization: str,
@@ -90,17 +138,6 @@ def load_model(
     Returns (model, processor)
     """
     from transformers import AutoProcessor, AutoModelForImageTextToText
-
-    cache_key = (
-        f"{model_name}_{quantization}_{device}_{offload_mode}_{gpu_memory_limit_gb}"
-    )
-
-    # Return cached model if available
-    if cache_key in _MODEL_CACHE:
-        print(f"Using cached model: {model_name}")
-        return _MODEL_CACHE[cache_key]
-
-    print(f"Loading model: {model_name} with {quantization}")
 
     # Determine device
     if device == "auto":
@@ -119,13 +156,29 @@ def load_model(
     }:
         print(
             "8-bit/4-bit quantization requires CUDA (bitsandbytes). "
-            "Falling back to FP16."
+            "Falling back to BF16/FP32."
         )
-        quantization = "None (FP16)"
+        quantization = "None (BF16)" if supports_bf16(device) else "None (FP32)"
 
-    cpu_offload_enabled = offload_mode == "CPU Offload (GPU-first)" and device == "cuda"
-    if offload_mode != "Disabled" and device != "cuda":
-        print("CPU offload mode requires CUDA. Disabling offload mode.")
+    accelerator_device = device if device in {"cuda", "xpu"} else None
+    if offload_mode != "Disabled" and accelerator_device is None:
+        print("CPU offload mode requires CUDA or XPU. Disabling offload mode.")
+        offload_mode = "Disabled"
+    cpu_offload_enabled = (
+        offload_mode == "CPU Offload (GPU-first)"
+        and accelerator_device in {"cuda", "xpu"}
+    )
+
+    cache_key = (
+        f"{model_name}_{quantization}_{device}_{offload_mode}_{gpu_memory_limit_gb}"
+    )
+
+    # Return cached model if available
+    if cache_key in _MODEL_CACHE:
+        print(f"Using cached model: {model_name}")
+        return _MODEL_CACHE[cache_key]
+
+    print(f"Loading model: {model_name} with {quantization}")
 
     # Check if model is pre-quantized (FP8)
     is_fp8_model = "FP8" in model_name
@@ -139,11 +192,11 @@ def load_model(
     if is_fp8_model:
         # FP8 models are pre-quantized and should be loaded as-is
         print(f"Loading pre-quantized FP8 model (checkpoint-native dtype)")
-        if device == "cuda":
+        if accelerator_device is not None:
             load_kwargs["device_map"] = "auto"
     elif quantization == "None (As-is)":
         print("Loading model with checkpoint-native dtype")
-        if device == "cuda":
+        if accelerator_device is not None:
             load_kwargs["device_map"] = "auto"
     elif quantization == "4-bit (VRAM-friendly)":
         from transformers import BitsAndBytesConfig
@@ -167,24 +220,31 @@ def load_model(
         load_kwargs["device_map"] = "auto"
     elif quantization == "None (BF16)":
         load_kwargs["torch_dtype"] = torch.bfloat16
-        if device == "cuda":
+        if accelerator_device is not None:
+            load_kwargs["device_map"] = "auto"
+    elif quantization == "None (FP32)":
+        load_kwargs["torch_dtype"] = torch.float32
+        if accelerator_device is not None:
             load_kwargs["device_map"] = "auto"
     else:  # None (FP16)
         load_kwargs["torch_dtype"] = torch.float16
-        if device == "cuda":
+        if accelerator_device is not None:
             load_kwargs["device_map"] = "auto"
 
     if cpu_offload_enabled:
         if gpu_memory_limit_gb > 0:
             gpu_cap_gb = gpu_memory_limit_gb
         else:
-            total_gpu_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            total_gpu_gb = get_total_device_memory_gb(accelerator_device)
             gpu_cap_gb = max(int(total_gpu_gb) - 2, 1)
         load_kwargs["max_memory"] = {
             0: f"{gpu_cap_gb}GiB",
             "cpu": "64GiB",
         }
-        print(f"CPU offload enabled with GPU memory cap: {gpu_cap_gb} GiB")
+        print(
+            f"CPU offload enabled on {accelerator_device.upper()} "
+            f"with accelerator memory cap: {gpu_cap_gb} GiB"
+        )
 
     # Enable Flash Attention 2 if available (must be set before loading)
     try:
@@ -203,7 +263,7 @@ def load_model(
         print(f"Error loading model: {e}")
         raise
 
-    if device != "cuda":
+    if accelerator_device is None:
         model = model.to(device)
 
     # Cache the model

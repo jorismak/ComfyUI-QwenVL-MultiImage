@@ -15,7 +15,7 @@ A powerful ComfyUI custom node that integrates Qwen2.5-VL and Qwen3-VL vision-la
 - 🖼️ **Multi-Image Support**: Process multiple images in a single inference
 - 🤖 **Latest Models**: Support for Qwen2.5-VL and Qwen3-VL series
 - 💾 **Flexible Quantization**: 4-bit, 8-bit, and FP16 options for different VRAM requirements
-- 🧠 **CPU Offloading**: Keep GPU as primary device while offloading layers to CPU when needed
+- 🧠 **CPU Offloading**: Keep CUDA/XPU as primary device while offloading layers to CPU when needed
 - ⚡ **Model Caching**: Keep models loaded in VRAM for faster subsequent runs
 - 🎛️ **Two Node Variants**: Standard and Advanced nodes for different use cases
 - 🔧 **Full Parameter Control**: Temperature, top_p, top_k, beam search, and more (Advanced node)
@@ -112,16 +112,16 @@ Use the **"🧪 QwenVL Multi-Image (Advanced)"** node for fine-grained control:
 | **system_prompt** | System instructions | "You are a helpful assistant." | Any text |
 | **user_prompt** | Your question/task | "Describe these images..." | Any text |
 | **quantization** | Memory optimization mode | 8-bit (Balanced) | As-is/FP16/8-bit/4-bit |
-| **offload_mode** | GPU-first offloading strategy | Disabled | Disabled/CPU Offload (GPU-first) |
-| **gpu_memory_limit_gb** | Target GPU VRAM budget for model placement with CPU offload (0 = auto) | 0 | 0-128 |
+| **offload_mode** | CUDA/XPU-first offloading strategy | Disabled | Disabled/CPU Offload (GPU-first) |
+| **gpu_memory_limit_gb** | Target accelerator memory budget for model placement with CPU offload (0 = auto) | 0 | 0-128 |
 | **max_tokens** | Maximum output length | 1024 | 64-4096 |
 | **keep_model_loaded** | Cache model in VRAM | True | True/False |
 | **seed** | Random seed | 1 | 1 - 2^32-1 |
 
 **How `gpu_memory_limit_gb` works**:
 - Used only when `offload_mode = CPU Offload (GPU-first)`.
-- It is passed to Transformers `max_memory` as the GPU memory budget during model placement/sharding.
-- Default `0` means auto: this node uses approximately **(total GPU VRAM - 2 GiB)**, with a minimum of **1 GiB**.
+- It is passed to Transformers `max_memory` as the accelerator (CUDA/XPU) memory budget during model placement/sharding.
+- Default `0` means auto: this node uses approximately **(total accelerator memory - 2 GiB)**, with a minimum of **1 GiB**.
 
 ### Advanced Parameters (Advanced Node Only)
 
@@ -144,6 +144,7 @@ Use the **"🧪 QwenVL Multi-Image (Advanced)"** node for fine-grained control:
 | 4-bit (VRAM-friendly) | 4-bit | Low | Slower | Good | <8GB VRAM |
 
 **Note**: FP8 models (pre-quantized) load with checkpoint-native dtype (no conversion).
+On non-CUDA systems, 8-bit/4-bit settings fall back to BF16 when supported, otherwise FP32.
 
 ## 🎨 Example Use Cases
 
