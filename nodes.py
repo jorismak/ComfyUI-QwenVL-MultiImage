@@ -30,6 +30,7 @@ QWEN_MODELS = [
 ]
 
 QUANTIZATION_OPTIONS = [
+    "None (As-is)",
     "None (FP16)",
     "None (BF16)",
     "8-bit (Balanced)",
@@ -119,11 +120,12 @@ def load_model(model_name: str, quantization: str, device: str = "auto"):
     load_kwargs = {}
 
     if is_fp8_model:
-        # FP8 models are pre-quantized
-        print(f"Loading pre-quantized FP8 model")
-        load_kwargs["torch_dtype"] = (
-            torch.float8_e4m3fn if hasattr(torch, "float8_e4m3fn") else torch.float16
-        )
+        # FP8 models are pre-quantized and should be loaded as-is
+        print(f"Loading pre-quantized FP8 model (checkpoint-native dtype)")
+        if device == "cuda":
+            load_kwargs["device_map"] = "auto"
+    elif quantization == "None (As-is)":
+        print("Loading model with checkpoint-native dtype")
         if device == "cuda":
             load_kwargs["device_map"] = "auto"
     elif quantization == "4-bit (VRAM-friendly)":

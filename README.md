@@ -110,7 +110,7 @@ Use the **"🧪 QwenVL Multi-Image (Advanced)"** node for fine-grained control:
 | **model_name** | Qwen-VL model to use | Qwen3-VL-4B-Instruct | See model list |
 | **system_prompt** | System instructions | "You are a helpful assistant." | Any text |
 | **user_prompt** | Your question/task | "Describe these images..." | Any text |
-| **quantization** | Memory optimization mode | 8-bit (Balanced) | FP16/8-bit/4-bit |
+| **quantization** | Memory optimization mode | 8-bit (Balanced) | As-is/FP16/8-bit/4-bit |
 | **max_tokens** | Maximum output length | 1024 | 64-4096 |
 | **keep_model_loaded** | Cache model in VRAM | True | True/False |
 | **seed** | Random seed | 1 | 1 - 2^32-1 |
@@ -130,11 +130,12 @@ Use the **"🧪 QwenVL Multi-Image (Advanced)"** node for fine-grained control:
 
 | Mode | Precision | VRAM Usage | Speed | Quality | Recommended For |
 |------|-----------|------------|-------|---------|-----------------|
+| None (As-is) | Checkpoint-native | Varies | Varies | Checkpoint default | FP8 or native dtype loading |
 | None (FP16) | 16-bit | High | Fastest | Best | 16GB+ VRAM |
 | 8-bit (Balanced) | 8-bit | Medium | Fast | Very Good | 8GB+ VRAM |
 | 4-bit (VRAM-friendly) | 4-bit | Low | Slower | Good | <8GB VRAM |
 
-**Note**: FP8 models (pre-quantized) automatically use optimized precision and ignore the quantization setting.
+**Note**: FP8 models (pre-quantized) load with checkpoint-native dtype (no conversion).
 
 ## 🎨 Example Use Cases
 
